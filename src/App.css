@@ -1,0 +1,92 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #FBF9F4;
+  color: #2A2724;
+}
+
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@font-face {
+  font-family: 'Mont';
+  src: url('/fonts/TT Interphases Pro Trial Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'MontHeavy';
+  src: url('/fonts/Mont-HeavyDEMO.otf') format('opentype');
+}
+
+.social-network-button {
+  width: 80px;
+  height: 80px;
+  color: white !important;
+  border-radius: 50% !important; 
+}
+
+.social-network-button svg {
+  width: 40px !important;
+  height: 40px !important;
+}
+
+
+.cl-internal-1dauvpw {
+  display: none !important;
+}
+
+ul[role="listbox"] {
+  z-index: 999999999 !important;
+}
+
+[data-rmiz-modal][open], [data-rmiz-modal-overlay="visible"]{
+  position: fixed;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.cl-internal-uumn80 {
+  display: block;
+  height: 150px;
+  width: 200px;
+  object-fit: contain;
+  padding-bottom: 20px;
+}
