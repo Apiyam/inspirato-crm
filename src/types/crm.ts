@@ -28,6 +28,7 @@ export interface ClientLead {
   full_name?: string;
   phone_number: string;
   status: string;
+  bot_paused?: boolean;
   message_text?: string;
   timestamp?: string;
 }

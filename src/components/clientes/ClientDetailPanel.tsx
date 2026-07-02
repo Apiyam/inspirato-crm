@@ -13,10 +13,12 @@ import {
   Input,
   Sheet,
   Stack,
+  Switch,
   Textarea,
   Typography,
 } from '@mui/joy';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import PauseCircleOutline from '@mui/icons-material/PauseCircleOutline';
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
 import SendRoundedIcon from '@mui/icons-material/SendRounded';
@@ -140,6 +142,14 @@ export default function ClientDetailPanel({ contact, onClose, onUpdated }: Clien
     }
   };
 
+  const handleBotPausedChange = async (paused: boolean) => {
+    if (!contact) return;
+    const updated = await updateClientLead(contact.id, { bot_paused: paused });
+    if (updated && onUpdated) {
+      onUpdated({ ...contact, bot_paused: paused });
+    }
+  };
+
   const handleAddComment = async () => {
     if (!contact || !newComment.trim()) return;
     setSavingComment(true);
@@ -249,6 +259,33 @@ export default function ClientDetailPanel({ contact, onClose, onUpdated }: Clien
                 Guardar
               </Button>
             </Box>
+          </Card>
+
+          <Card
+            variant="outlined"
+            sx={{
+              p: 1.5,
+              borderRadius: '14px',
+              borderColor: contact.bot_paused ? 'warning.400' : 'neutral.200',
+              bgcolor: contact.bot_paused ? 'warning.50' : 'background.surface',
+            }}
+          >
+            <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={1.25}>
+              <PauseCircleOutline sx={{ color: contact.bot_paused ? 'warning.700' : 'neutral.400', mr: 'auto' }} />
+              <Box sx={{ mr: 'auto' }}>
+                <Typography level="title-sm" fontWeight={800} sx={{ color: contact.bot_paused ? 'warning.800' : 'text.primary' }}>
+                  {contact.bot_paused ? 'Bot pausado' : 'Bot activo'}
+                </Typography>
+                <Typography level="body-xs" sx={{ color: contact.bot_paused ? 'warning.700' : 'text.tertiary' }}>
+                  {contact.bot_paused ? 'Sin respuestas automáticas' : 'Camila puede responder automáticamente'}
+                </Typography>
+              </Box>
+              <Switch
+                checked={Boolean(contact.bot_paused)}
+                onChange={(e) => handleBotPausedChange(e.target.checked)}
+                color="warning"
+              />
+            </Stack>
           </Card>
 
           <Box ref={sentinelRef} sx={{ height: 1 }} aria-hidden />

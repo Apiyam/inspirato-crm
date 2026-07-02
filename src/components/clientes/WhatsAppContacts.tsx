@@ -20,6 +20,7 @@ import {
 import {
   ChevronRightRounded,
   ContactsRounded,
+  PauseCircleOutline,
   PhoneRounded,
   Search,
 } from '@mui/icons-material';
@@ -78,6 +79,7 @@ export default function WhatsAppContacts() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [botFilter, setBotFilter] = useState<'all' | 'paused' | 'active'>('all');
   const [page, setPage] = useState(1);
   const [detailContact, setDetailContact] = useState<ClientLead | null>(null);
 
@@ -89,10 +91,12 @@ export default function WhatsAppContacts() {
   }, []);
 
   const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: contacts.length };
+    const counts: Record<string, number> = { all: contacts.length, bot_paused: 0, bot_active: 0 };
     for (const contact of contacts) {
       const key = contact.status || 'sin_estatus';
       counts[key] = (counts[key] || 0) + 1;
+      if (contact.bot_paused) counts.bot_paused += 1;
+      else counts.bot_active += 1;
     }
     return counts;
   }, [contacts]);
@@ -102,7 +106,11 @@ export default function WhatsAppContacts() {
     return contacts
       .filter((contact) => {
         const matchesStatus = statusFilter === 'all' || contact.status === statusFilter;
-        if (!matchesStatus) return false;
+        const matchesBot =
+          botFilter === 'all' ||
+          (botFilter === 'paused' && contact.bot_paused) ||
+          (botFilter === 'active' && !contact.bot_paused);
+        if (!matchesStatus || !matchesBot) return false;
         if (!query) return true;
         return (
           (contact.full_name || '').toLowerCase().includes(query) ||
@@ -111,7 +119,7 @@ export default function WhatsAppContacts() {
         );
       })
       .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-  }, [contacts, search, statusFilter]);
+  }, [contacts, search, statusFilter, botFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredContacts.length / PAGE_SIZE));
   const paginatedContacts = filteredContacts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -176,6 +184,15 @@ export default function WhatsAppContacts() {
                   <Option key={s.key} value={s.key}>{s.label}</Option>
                 ))}
               </Select>
+              <Select
+                value={botFilter}
+                onChange={(_, v) => { setBotFilter((v as typeof botFilter) || 'all'); setPage(1); }}
+                sx={{ minWidth: 160, borderRadius: '12px', bgcolor: '#FFFFFF', boxShadow: 'xs' }}
+              >
+                <Option value="all">Bot: todos</Option>
+                <Option value="active">Bot activo</Option>
+                <Option value="paused">Bot pausado</Option>
+              </Select>
             </Stack>
           </Stack>
 
@@ -208,6 +225,25 @@ export default function WhatsAppContacts() {
                 {s.label} ({statusCounts[s.key] || 0})
               </Chip>
             ))}
+            <Chip
+              size="sm"
+              variant={botFilter === 'paused' ? 'solid' : 'soft'}
+              color="warning"
+              startDecorator={<PauseCircleOutline sx={{ fontSize: 14 }} />}
+              onClick={() => { setBotFilter(botFilter === 'paused' ? 'all' : 'paused'); setPage(1); }}
+              sx={{ borderRadius: '999px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Bot pausado ({statusCounts.bot_paused || 0})
+            </Chip>
+            <Chip
+              size="sm"
+              variant={botFilter === 'active' ? 'solid' : 'soft'}
+              color="success"
+              onClick={() => { setBotFilter(botFilter === 'active' ? 'all' : 'active'); setPage(1); }}
+              sx={{ borderRadius: '999px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Bot activo ({statusCounts.bot_active || 0})
+            </Chip>
           </Stack>
         </Box>
 
@@ -309,9 +345,22 @@ export default function WhatsAppContacts() {
                         </Stack>
                       </td>
                       <td>
-                        <Chip size="sm" sx={statusChipSx(statusCfg)}>
-                          {getStatusLabel(contact.status)}
-                        </Chip>
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          <Chip size="sm" sx={statusChipSx(statusCfg)}>
+                            {getStatusLabel(contact.status)}
+                          </Chip>
+                          {contact.bot_paused && (
+                            <Chip
+                              size="sm"
+                              color="warning"
+                              variant="solid"
+                              startDecorator={<PauseCircleOutline sx={{ fontSize: 14 }} />}
+                              sx={{ fontWeight: 700 }}
+                            >
+                              Bot pausado
+                            </Chip>
+                          )}
+                        </Stack>
                       </td>
                       <td>
                         <Typography
@@ -376,15 +425,15 @@ export default function WhatsAppContacts() {
                   No hay contactos
                 </Typography>
                 <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', maxWidth: 320 }}>
-                  {search.trim() || statusFilter !== 'all'
-                    ? 'Prueba con otro término de búsqueda o cambia el filtro de estado.'
+                  {search.trim() || statusFilter !== 'all' || botFilter !== 'all'
+                    ? 'Prueba con otro término de búsqueda o cambia los filtros.'
                     : 'Cuando lleguen conversaciones de WhatsApp, aparecerán aquí.'}
                 </Typography>
-                {(search.trim() || statusFilter !== 'all') && (
+                {(search.trim() || statusFilter !== 'all' || botFilter !== 'all') && (
                   <Button
                     size="sm"
                     variant="soft"
-                    onClick={() => { setSearch(''); setStatusFilter('all'); setPage(1); }}
+                    onClick={() => { setSearch(''); setStatusFilter('all'); setBotFilter('all'); setPage(1); }}
                   >
                     Limpiar filtros
                   </Button>

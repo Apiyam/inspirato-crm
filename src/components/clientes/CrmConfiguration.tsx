@@ -28,21 +28,70 @@ import ViewCarouselRoundedIcon from '@mui/icons-material/ViewCarouselRounded';
 import { useCrmConfig } from 'hooks/useCrmConfig';
 import { LeadStatusConfig, TwilioCardMapping } from 'types/crm';
 
+function slugifyStatusKey(label: string): string {
+  return label
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || `estado_${Date.now()}`;
+}
+
+function validateLeadStatuses(statuses: LeadStatusConfig[]): string | null {
+  if (statuses.length === 0) return 'Debes tener al menos un estado de cliente.';
+  const keys = new Set<string>();
+  for (const status of statuses) {
+    const key = status.key.trim();
+    const label = status.label.trim();
+    if (!label) return 'Cada estado debe tener una etiqueta visible.';
+    if (!key) return `El estado "${label}" necesita una clave interna.`;
+    if (keys.has(key)) return `La clave "${key}" está duplicada. Usa claves únicas.`;
+    keys.add(key);
+  }
+  return null;
+}
+
 export default function CrmConfiguration() {
   const { config, loading, save } = useCrmConfig();
   const [draft, setDraft] = useState(config);
   const [saving, setSaving] = useState(false);
   const [snack, setSnack] = useState('');
+  const [snackColor, setSnackColor] = useState<'success' | 'danger'>('success');
+  const [configSynced, setConfigSynced] = useState(false);
 
   useEffect(() => {
-    if (!loading) setDraft(config);
-  }, [config, loading]);
+    if (!loading && !configSynced) {
+      setDraft(config);
+      setConfigSynced(true);
+    }
+  }, [config, loading, configSynced]);
 
   const handleSave = async () => {
+    const normalizedStatuses = draft.leadStatuses.map((status) => ({
+      ...status,
+      key: status.key.trim(),
+      label: status.label.trim(),
+      color: status.color.trim() || '#B0694D',
+    }));
+    const validationError = validateLeadStatuses(normalizedStatuses);
+    if (validationError) {
+      setSnackColor('danger');
+      setSnack(validationError);
+      return;
+    }
+
     setSaving(true);
-    const ok = await save(draft);
+    const ok = await save({ ...draft, leadStatuses: normalizedStatuses });
     setSaving(false);
-    setSnack(ok ? 'Configuración guardada correctamente' : 'Error al guardar');
+    if (ok) {
+      setDraft((prev) => ({ ...prev, leadStatuses: normalizedStatuses }));
+      setSnackColor('success');
+      setSnack('Configuración guardada correctamente');
+    } else {
+      setSnackColor('danger');
+      setSnack('Error al guardar');
+    }
   };
 
   const updateStatus = (index: number, field: keyof LeadStatusConfig, value: string) => {
@@ -54,16 +103,22 @@ export default function CrmConfiguration() {
   };
 
   const addStatus = () => {
+    const label = 'Nuevo estado';
     setDraft((prev) => ({
       ...prev,
       leadStatuses: [
         ...prev.leadStatuses,
-        { key: `estado_${Date.now()}`, label: 'Nuevo estado', color: '#B0694D' },
+        { key: slugifyStatusKey(`${label}_${prev.leadStatuses.length + 1}`), label, color: '#B0694D' },
       ],
     }));
   };
 
   const removeStatus = (index: number) => {
+    if (draft.leadStatuses.length <= 1) {
+      setSnackColor('danger');
+      setSnack('Debes conservar al menos un estado de cliente.');
+      return;
+    }
     setDraft((prev) => ({
       ...prev,
       leadStatuses: prev.leadStatuses.filter((_, i) => i !== index),
@@ -113,7 +168,7 @@ export default function CrmConfiguration() {
           <Typography level="title-lg" fontWeight={700}>Estados de leads y contactos</Typography>
         </Stack>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', mb: 2 }}>
-          Define los estatus disponibles para clasificar conversaciones. Cada estado tiene clave interna, etiqueta visible y color.
+          Como administrador, define los estatus disponibles para clasificar conversaciones. Cada estado tiene clave interna, etiqueta visible y color. Los nuevos estados aparecen de inmediato en el Inbox, Contactos y filtros tras guardar.
         </Typography>
 
         <Box
@@ -148,7 +203,7 @@ export default function CrmConfiguration() {
           <Stack divider={<Divider />} sx={{ '--Divider-lineColor': 'var(--joy-palette-neutral-200)' }}>
             {draft.leadStatuses.map((status, index) => (
               <Box
-                key={`${status.key}-${index}`}
+                key={`status-row-${index}`}
                 sx={{
                   display: 'grid',
                   gridTemplateColumns: {
@@ -223,19 +278,21 @@ export default function CrmConfiguration() {
                 </FormControl>
 
                 {/* Color */}
-                <FormControl size="sm" sx={{ minWidth: 0, gridColumn: { xs: '1 / -1', md: '4' } }}>
+                <Box sx={{ minWidth: 0, gridColumn: { xs: '1 / -1', md: '4' } }}>
                   <FormLabel sx={{ display: { md: 'none' }, mb: 0.5 }}>Color</FormLabel>
                   <Stack direction="row" spacing={1} alignItems="center">
-                  <Input
-                        type="color"
-                        value={status.color}
-                        onChange={(e) => updateStatus(index, 'color', e.target.value)}
-                        sx={{
-                          
-                          border: 'none',
-                          cursor: 'pointer',
-                        }}
-                      />
+                    <Input
+                      type="color"
+                      value={status.color}
+                      onChange={(e) => updateStatus(index, 'color', e.target.value)}
+                      sx={{
+                        width: 44,
+                        minWidth: 44,
+                        p: 0.25,
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    />
                     <Input
                       size="sm"
                       value={status.color}
@@ -245,7 +302,7 @@ export default function CrmConfiguration() {
                       sx={{ flex: 1, minWidth: 0 }}
                     />
                   </Stack>
-                </FormControl>
+                </Box>
 
               </Box>
             ))}
@@ -371,7 +428,7 @@ export default function CrmConfiguration() {
             <Stack divider={<Divider />} sx={{ '--Divider-lineColor': 'var(--joy-palette-neutral-200)' }}>
               {cardMappings.map((row, index) => (
                 <Box
-                  key={`${row.intention}-${index}`}
+                  key={`card-row-${index}`}
                   sx={{
                     display: 'grid',
                     gridTemplateColumns: {
@@ -449,7 +506,7 @@ export default function CrmConfiguration() {
         </Button>
       </Box>
 
-      <Snackbar open={Boolean(snack)} autoHideDuration={3000} onClose={() => setSnack('')} color="success">
+      <Snackbar open={Boolean(snack)} autoHideDuration={4000} onClose={() => setSnack('')} color={snackColor}>
         <CheckCircleRoundedIcon /> {snack}
       </Snackbar>
     </Stack>
