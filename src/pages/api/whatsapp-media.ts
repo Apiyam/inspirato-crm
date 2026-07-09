@@ -18,7 +18,10 @@ type MediaResponse = {
   error?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<MediaResponse>) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<MediaResponse | Buffer>,
+) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método no permitido.' });
   }
