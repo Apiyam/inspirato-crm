@@ -140,17 +140,13 @@ export default function Sidebar() {
             flexShrink: 0,
           }}
         >
-          <img src="/logo.png" alt="Inspirato CRM" width={36}/>
-        </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography level="title-md" sx={{ color: 'text.primary', fontWeight: 700, lineHeight: 1.2 }}>
-            Inspirato CRM
-          </Typography>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            CRM y Asistente IA
-          </Typography>
+          <img src="/logo-full.png" alt="Inspirato CRM" height={80}/>
         </Box>
       </Box>
+      <Divider sx={{ borderColor: 'neutral.200' }} />
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', textAlign: 'center' }}>
+            CRM y Asistente IA
+          </Typography>
 
       <Box
         sx={{

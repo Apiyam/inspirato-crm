@@ -67,6 +67,51 @@ const extractUrlFromText = (text: string): string | undefined => {
   return match?.[0];
 };
 
+/** URLs de la API de Twilio requieren auth — no son descargables en el browser. */
+export function isTwilioApiUrl(url?: string): boolean {
+  if (!url) return false;
+  return /api\.twilio\.com/i.test(url);
+}
+
+/** URL pública usable directamente (CDN, Storage, etc.). */
+export function isUsableDirectMediaUrl(url?: string): boolean {
+  if (!url) return false;
+  return !isTwilioApiUrl(url);
+}
+
+/** Extrae ME… o MM… de una URL de media de Twilio. */
+export function extractTwilioMediaId(url?: string): string | undefined {
+  if (!url) return undefined;
+  const mediaMatch = url.match(/\/Media\/(ME[a-f0-9]+)/i);
+  if (mediaMatch) return mediaMatch[1];
+  const messageMatch = url.match(/\/Messages\/(MM[a-f0-9]+)/i);
+  if (messageMatch) return messageMatch[1];
+  return undefined;
+}
+
+export function sanitizeMediaFields(
+  mediaUrl?: string,
+  mediaId?: string,
+): { mediaUrl?: string; mediaId?: string } {
+  let url = mediaUrl;
+  let id = mediaId;
+
+  if (url && isTwilioApiUrl(url)) {
+    id = id || extractTwilioMediaId(url);
+    url = undefined;
+  }
+
+  return { mediaUrl: url, mediaId: id };
+}
+
+export function getStoredMediaUrl(raw: Record<string, unknown>): string | undefined {
+  for (const key of ['media_url', 'mediaUrl', 'image_url', 'attachment_url', 'file_url']) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 export function parseWhatsAppMessage(
   raw: Record<string, unknown>,
   formatTime: (timestamp: string) => string,
@@ -130,6 +175,10 @@ export function parseWhatsAppMessage(
   if (hasMedia && mediaType === 'text') {
     mediaType = mediaUrl ? inferTypeFromUrl(mediaUrl) : 'unknown';
   }
+
+  const sanitized = sanitizeMediaFields(mediaUrl, mediaId);
+  mediaUrl = sanitized.mediaUrl;
+  mediaId = sanitized.mediaId;
 
   return {
     id,

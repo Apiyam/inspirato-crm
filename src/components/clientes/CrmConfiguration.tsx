@@ -161,7 +161,7 @@ export default function CrmConfiguration() {
   const cardMappings = draft.cardMappings || [];
 
   return (
-    <Stack spacing={2} sx={{ height: '100%', overflow: 'auto' }}>
+    <Stack spacing={2}>
       <Card variant="outlined" sx={{ p: 2.5, borderRadius: '16px', bgcolor: '#FFFFFF' }}>
         <Stack direction="row" spacing={1} alignItems="center" mb={1}>
           <LocalOfferRoundedIcon sx={{ color: 'primary.500' }} />

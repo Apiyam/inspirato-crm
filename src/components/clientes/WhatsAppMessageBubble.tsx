@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
+  Button,
   CircularProgress,
   IconButton,
   Modal,
@@ -17,12 +18,21 @@ import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import EmojiEmotionsRoundedIcon from '@mui/icons-material/EmojiEmotionsRounded';
 import InsertDriveFileRoundedIcon from '@mui/icons-material/InsertDriveFileRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
 import {
+  extractTwilioMediaId,
+  getStoredMediaUrl,
+  isUsableDirectMediaUrl,
   mediaTypeLabel,
   ParsedWhatsAppMessage,
   WhatsAppMediaType,
 } from 'utils/whatsappMessage';
+import {
+  fetchAndAutoDownloadMedia,
+  guessDownloadFilename,
+  triggerBlobDownload,
+  triggerFileDownload,
+} from 'utils/mediaFileInfoClient';
 
 const mediaIconSx = { fontSize: 16 };
 
@@ -43,63 +53,95 @@ function MediaIcon({ type }: { type: WhatsAppMediaType }) {
   }
 }
 
+function isPreviewType(type: WhatsAppMediaType): boolean {
+  return type === 'image' || type === 'video' || type === 'sticker';
+}
+
+function getMediaIdForFetch(message: ParsedWhatsAppMessage): string | undefined {
+  return message.mediaId || extractTwilioMediaId(message.mediaUrl);
+}
+
 interface WhatsAppMessageBubbleProps {
   message: ParsedWhatsAppMessage;
 }
 
 export default function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [mediaUrl, setMediaUrl] = useState<string | undefined>(message.mediaUrl);
-  const [resolvedType, setResolvedType] = useState<WhatsAppMediaType>(message.mediaType);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+  const [mediaUrl, setMediaUrl] = useState<string | undefined>(
+    isUsableDirectMediaUrl(message.mediaUrl) ? message.mediaUrl : undefined,
+  );
+  const [downloadFilename, setDownloadFilename] = useState<string | undefined>();
+  const [resolvedType] = useState<WhatsAppMediaType>(message.mediaType);
 
   const isUser = message.from === 'user';
 
-  const openMedia = async () => {
-    if (!message.hasMedia) return;
+  const preferredFilename =
+    guessDownloadFilename(message.text) ||
+    guessDownloadFilename(message.caption) ||
+    undefined;
 
-    setOpen(true);
-    setError('');
+  useEffect(() => {
+    return () => {
+      if (mediaUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(mediaUrl);
+      }
+    };
+  }, [mediaUrl]);
 
-    if (mediaUrl) return;
+  const handleMediaClick = async () => {
+    if (!message.hasMedia || downloading) return;
 
-    setLoading(true);
+    setDownloadError('');
+    setDownloading(true);
+
     try {
-      const response = await fetch('/api/whatsapp-media', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId: message.id }),
+      if (mediaUrl && isUsableDirectMediaUrl(mediaUrl)) {
+        triggerFileDownload(mediaUrl, preferredFilename);
+        if (isPreviewType(message.mediaType)) setOpen(true);
+        return;
+      }
+
+      const mediaId = getMediaIdForFetch(message);
+      if (!mediaId) {
+        throw new Error('Este mensaje no tiene media_id para consultar el archivo.');
+      }
+
+      const file = await fetchAndAutoDownloadMedia(
+        {
+          mediaId,
+          mediaUrl: getStoredMediaUrl(message.raw) || message.mediaUrl,
+        },
+        preferredFilename,
+      );
+
+      setMediaUrl((prev) => {
+        if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+        return file.blobUrl;
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || 'No se pudo cargar el archivo.');
-      setMediaUrl(payload.mediaUrl);
-      if (payload.mediaType) setResolvedType(payload.mediaType);
+      setDownloadFilename(file.filename);
+
+      if (isPreviewType(message.mediaType)) {
+        setOpen(true);
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al cargar media.');
+      setDownloadError(err instanceof Error ? err.message : 'Error al descargar el archivo.');
     } finally {
-      setLoading(false);
+      setDownloading(false);
     }
   };
 
+  const handleRedownload = () => {
+    if (!mediaUrl) return;
+    triggerBlobDownload(mediaUrl, downloadFilename || preferredFilename || 'archivo');
+  };
+
   const renderMediaPreview = () => {
-    if (loading) {
-      return (
-        <Stack alignItems="center" py={3}>
-          <CircularProgress size="sm" />
-          <Typography level="body-sm" sx={{ mt: 1 }}>Cargando archivo...</Typography>
-        </Stack>
-      );
-    }
-
-    if (error) {
-      return <Typography level="body-sm" color="danger">{error}</Typography>;
-    }
-
     if (!mediaUrl) {
       return (
         <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          No hay URL de media disponible para este mensaje.
+          Haz clic en el adjunto para descargarlo.
         </Typography>
       );
     }
@@ -131,19 +173,9 @@ export default function WhatsAppMessageBubble({ message }: WhatsAppMessageBubble
     }
 
     return (
-      <Stack spacing={1} alignItems="flex-start">
-        <Typography level="body-sm">Documento / archivo adjunto</Typography>
-        <IconButton
-          component="a"
-          href={mediaUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          variant="soft"
-          color="primary"
-        >
-          <OpenInNewRoundedIcon />
-        </IconButton>
-      </Stack>
+      <Typography level="body-sm">
+        Archivo descargado. Revisa tu carpeta de descargas.
+      </Typography>
     );
   };
 
@@ -180,29 +212,59 @@ export default function WhatsAppMessageBubble({ message }: WhatsAppMessageBubble
           <Box
             component="button"
             type="button"
-            onClick={openMedia}
+            onClick={handleMediaClick}
+            disabled={downloading}
             sx={{
               mt: message.text ? 1 : 0,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 0.75,
-              px: 1,
-              py: 0.5,
+              px: 1.25,
+              py: 0.625,
+              minWidth: 128,
               border: '1px solid',
-              borderColor: isUser ? 'neutral.300' : 'primary.300',
+              borderColor: downloadError
+                ? 'danger.300'
+                : isUser
+                  ? 'neutral.300'
+                  : 'primary.300',
               borderRadius: '999px',
-              bgcolor: isUser ? 'neutral.50' : 'primary.50',
-              cursor: 'pointer',
+              bgcolor: downloading
+                ? isUser
+                  ? 'neutral.100'
+                  : 'primary.200'
+                : isUser
+                  ? 'neutral.50'
+                  : 'primary.50',
+              cursor: downloading ? 'wait' : 'pointer',
               font: 'inherit',
               color: 'inherit',
-              '&:hover': { opacity: 0.85 },
+              '&:hover': { opacity: downloading ? 1 : 0.85 },
+              '&:disabled': { cursor: 'wait' },
             }}
           >
-            <MediaIcon type={message.mediaType} />
-            <Typography level="body-xs" fontWeight={600}>
-              {mediaTypeLabel[message.mediaType]}
-            </Typography>
+            {downloading ? (
+              <>
+                <CircularProgress size="sm" thickness={5} sx={{ '--CircularProgress-size': '16px' }} />
+                <Typography level="body-xs" fontWeight={600}>
+                  Descargando...
+                </Typography>
+              </>
+            ) : (
+              <>
+                <MediaIcon type={message.mediaType} />
+                <Typography level="body-xs" fontWeight={600}>
+                  {mediaTypeLabel[message.mediaType]}
+                </Typography>
+              </>
+            )}
           </Box>
+        )}
+
+        {downloadError && (
+          <Typography level="body-xs" color="danger" sx={{ mt: 0.5 }}>
+            {downloadError}
+          </Typography>
         )}
 
         <Typography level="body-xs" sx={{ textAlign: 'right', mt: 0.5, opacity: 0.6 }}>
@@ -229,6 +291,18 @@ export default function WhatsAppMessageBubble({ message }: WhatsAppMessageBubble
           )}
 
           {renderMediaPreview()}
+
+          {mediaUrl && (
+            <Button
+              size="sm"
+              variant="outlined"
+              startDecorator={<DownloadRoundedIcon />}
+              sx={{ mt: 1.5, alignSelf: 'flex-start' }}
+              onClick={handleRedownload}
+            >
+              Volver a descargar
+            </Button>
+          )}
         </ModalDialog>
       </Modal>
     </>

@@ -1,6 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { fetchMessageById } from './entities';
-import { parseWhatsAppMessage } from 'utils/whatsappMessage';
+import {
+  parseWhatsAppMessage,
+  isUsableDirectMediaUrl,
+  extractTwilioMediaId,
+  getStoredMediaUrl,
+} from 'utils/whatsappMessage';
+import { fetchMediaBinaryFromN8n } from 'utils/n8nFileInfo';
+import { resolveMessageMedia } from 'utils/whatsappMediaServer';
 
 type MediaResponse = {
   mediaUrl?: string;
@@ -11,54 +18,44 @@ type MediaResponse = {
   error?: string;
 };
 
-const formatTimestamp = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('es-MX', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-};
-
-async function fetchMediaFromWebhook(payload: Record<string, unknown>) {
-  const webhook =
-    process.env.NEXT_PUBLIC_N8N_WHATSAPP_WEBHOOK_URL ||
-    process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL;
-  if (!webhook) return null;
-
-  const response = await fetch(webhook, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'get_media',
-      ...payload,
-    }),
-  });
-
-  if (!response.ok) return null;
-  const data = await response.json();
-  return (
-    data?.media_url ||
-    data?.mediaUrl ||
-    data?.url ||
-    data?.link ||
-    data?.file_url ||
-    null
-  );
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse<MediaResponse>) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método no permitido.' });
   }
 
+  const bodyMediaId = String(req.body?.media_id || '').trim();
+  const bodyMediaUrl = String(req.body?.media_url || '').trim();
   const messageId = Number(req.body?.messageId);
+
+  if (bodyMediaId) {
+    const response = await fetchMediaBinaryFromN8n({
+      mediaId: bodyMediaId,
+      mediaUrl: bodyMediaUrl || undefined,
+    });
+
+    if (!response?.ok) {
+      return res.status(404).json({ error: 'No se encontró media para este media_id.' });
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        const data = (await response.json()) as { error?: string };
+        return res.status(404).json({ error: data.error || 'No se encontró media para este media_id.' });
+      } catch {
+        return res.status(404).json({ error: 'No se encontró media para este media_id.' });
+      }
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.setHeader('Content-Type', contentType || 'application/octet-stream');
+    const disposition = response.headers.get('content-disposition');
+    if (disposition) res.setHeader('Content-Disposition', disposition);
+    return res.status(200).send(buffer);
+  }
+
   if (!messageId) {
-    return res.status(400).json({ error: 'messageId requerido.' });
+    return res.status(400).json({ error: 'media_id o messageId requerido.' });
   }
 
   const row = await fetchMessageById(messageId);
@@ -66,9 +63,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(404).json({ error: 'Mensaje no encontrado.' });
   }
 
-  const parsed = parseWhatsAppMessage(row as Record<string, unknown>, formatTimestamp);
-
-  if (parsed.mediaUrl) {
+  const parsed = parseWhatsAppMessage(row as Record<string, unknown>, () => '');
+  if (isUsableDirectMediaUrl(parsed.mediaUrl)) {
     return res.status(200).json({
       mediaUrl: parsed.mediaUrl,
       mediaType: parsed.mediaType,
@@ -78,27 +74,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
   }
 
-  if (parsed.mediaId || parsed.hasMedia) {
-    const remoteUrl = await fetchMediaFromWebhook({
-      message_id: messageId,
-      media_id: parsed.mediaId,
-      user_phone: row.user_phone,
-      phone_number: row.user_phone,
+  const resolvedMediaId =
+    parsed.mediaId ||
+    extractTwilioMediaId(String(row.media_url || '')) ||
+    extractTwilioMediaId(parsed.mediaUrl);
+
+  if (resolvedMediaId) {
+    const response = await fetchMediaBinaryFromN8n({
+      mediaId: resolvedMediaId,
+      mediaUrl: getStoredMediaUrl(row as Record<string, unknown>) || String(row.media_url || ''),
     });
 
-    if (remoteUrl) {
-      return res.status(200).json({
-        mediaUrl: remoteUrl,
-        mediaType: parsed.mediaType,
-        mediaMime: parsed.mediaMime,
-        caption: parsed.caption,
-        text: parsed.text,
-      });
+    if (response?.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        res.setHeader('Content-Type', contentType || 'application/octet-stream');
+        const disposition = response.headers.get('content-disposition');
+        if (disposition) res.setHeader('Content-Disposition', disposition);
+        return res.status(200).send(buffer);
+      }
     }
   }
 
+  const resolved = await resolveMessageMedia(row as Record<string, unknown>);
+  if (resolved?.mediaUrl && isUsableDirectMediaUrl(resolved.mediaUrl)) {
+    return res.status(200).json({
+      mediaUrl: resolved.mediaUrl,
+      mediaType: resolved.mediaType,
+      mediaMime: resolved.mediaMime,
+      caption: resolved.caption,
+      text: resolved.text,
+    });
+  }
+
   return res.status(404).json({
-    error: 'No se encontró media para este mensaje.',
+    error: 'No se encontró media descargable para este mensaje.',
     text: parsed.text,
     caption: parsed.caption,
   });

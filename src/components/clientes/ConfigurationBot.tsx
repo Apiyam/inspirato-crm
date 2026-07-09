@@ -27,7 +27,7 @@ export default function ConfigurationBot() {
   };
 
   return (
-    <Stack spacing={2} sx={{ height: '100%' }}>
+    <Stack spacing={2}>
       <Card variant="outlined" sx={{ p: 2.5, borderRadius: '16px', bgcolor: '#FFFFFF' }}>
         <Stack direction="row" spacing={1} alignItems="center" mb={1}>
           <AutoAwesomeRoundedIcon sx={{ color: 'primary.500' }} />

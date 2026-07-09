@@ -31,6 +31,9 @@ export interface ClientLead {
   bot_paused?: boolean;
   message_text?: string;
   timestamp?: string;
+  message_count?: number;
+  incoming_count?: number;
+  outgoing_count?: number;
 }
 
 export interface ChatMessage {
@@ -93,6 +96,20 @@ export interface MessageStats {
   total: number;
   incoming: number;
   outgoing: number;
+}
+
+export interface ConversationMediaItem {
+  messageId: number;
+  mediaUrl?: string;
+  sourceMediaUrl?: string;
+  mediaType: string;
+  mediaMime?: string;
+  mediaId?: string;
+  caption?: string;
+  text?: string;
+  timestamp: string;
+  direction: 'incoming' | 'outgoing';
+  resolved: boolean;
 }
 
 export const DEFAULT_LEAD_STATUSES: LeadStatusConfig[] = [

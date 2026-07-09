@@ -41,6 +41,7 @@ import EmailRoundedIcon from '@mui/icons-material/EmailRounded';
 import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
 import WorkRoundedIcon from '@mui/icons-material/WorkRounded';
 import { Option, Select } from '@mui/joy';
+import ConversationMediaGallery from './ConversationMediaGallery';
 
 interface ClientDetailPanelProps {
   contact: ClientLead | null;
@@ -287,6 +288,8 @@ export default function ClientDetailPanel({ contact, onClose, onUpdated }: Clien
               />
             </Stack>
           </Card>
+
+          <ConversationMediaGallery phoneNumber={contact.phone_number} />
 
           <Box ref={sentinelRef} sx={{ height: 1 }} aria-hidden />
 

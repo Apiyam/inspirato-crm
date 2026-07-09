@@ -69,7 +69,9 @@ export default function ApiyamCardLayout({
               px: fullBleed ? 0 : { xs: 2, md: 3 },
               pt: fullBleed ? 0 : 0,
               pb: fullBleed ? 0 : { xs: 1, md: 1.5 },
-              overflow: 'hidden',
+              overflowY: fullBleed ? 'hidden' : 'auto',
+              overflowX: 'hidden',
+              WebkitOverflowScrolling: 'touch',
             }}
           >
             {children}
