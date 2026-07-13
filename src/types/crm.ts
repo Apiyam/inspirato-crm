@@ -23,6 +23,32 @@ export interface CrmConfig {
   cardMappings: TwilioCardMapping[];
 }
 
+export type UserRole = 'superadmin' | 'ejecutivo';
+
+export type InviteStatus = 'pending' | 'accepted' | 'revoked';
+
+export interface Profile {
+  id: string;
+  role: UserRole;
+  full_name?: string | null;
+  email?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserInvite {
+  id: number;
+  email: string;
+  full_name?: string | null;
+  role: UserRole;
+  status: InviteStatus;
+  invited_by?: string | null;
+  invited_user_id?: string | null;
+  created_at: string;
+  accepted_at?: string | null;
+  updated_at?: string;
+}
+
 export interface ClientLead {
   id: number;
   full_name?: string;
@@ -34,6 +60,7 @@ export interface ClientLead {
   message_count?: number;
   incoming_count?: number;
   outgoing_count?: number;
+  unread_count?: number;
 }
 
 export interface ChatMessage {

@@ -22,49 +22,69 @@ import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import ContactsRoundedIcon from '@mui/icons-material/ContactsRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
+import GroupRoundedIcon from '@mui/icons-material/GroupRounded';
 import { useAuth } from 'providers/AuthProvider';
 import { useRouter } from 'next/router';
 import { closeSidebar } from 'utils/Utils';
+import { ClientLead } from 'types/crm';
 
 const baseUrl = '/clientes';
 
-const navItems = [
+type NavItem = {
+  label: string;
+  href: string;
+  icon: React.ReactNode;
+  badge?: boolean;
+  superAdminOnly?: boolean;
+};
+
+const navItems: NavItem[] = [
   { label: 'Inicio', href: baseUrl, icon: <HomeRoundedIcon /> },
   { label: 'Inbox', href: `${baseUrl}/whatsapp?tab=chatbot`, icon: <QuestionAnswerRoundedIcon />, badge: true },
   { label: 'Contactos', href: `${baseUrl}/whatsapp?tab=contactos`, icon: <ContactsRoundedIcon /> },
-  { label: 'Asistente IA Camila', href: `${baseUrl}/bot`, icon: <SettingsRoundedIcon /> },
-  { label: 'Configuración CRM', href: `${baseUrl}/configuracion`, icon: <TuneRoundedIcon /> },
+  { label: 'Asistente IA Camila', href: `${baseUrl}/bot`, icon: <SettingsRoundedIcon />, superAdminOnly: true },
+  { label: 'Configuración CRM', href: `${baseUrl}/configuracion`, icon: <TuneRoundedIcon />, superAdminOnly: true },
+  { label: 'Equipo', href: `${baseUrl}/equipo`, icon: <GroupRoundedIcon />, superAdminOnly: true },
   { label: 'Mi cuenta', href: `${baseUrl}/cuenta`, icon: <PersonRoundedIcon /> },
 ];
 
 export default function Sidebar() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isSuperAdmin, profile } = useAuth();
   const router = useRouter();
-  const [pendingCount, setPendingCount] = React.useState(0);
+  const [unreadTotal, setUnreadTotal] = React.useState(0);
 
   React.useEffect(() => {
-    const loadPending = async () => {
+    const loadUnread = async () => {
       try {
         const { fetchClientLeads } = await import('pages/api/entities');
-        const leads = await fetchClientLeads();
-        const count = (leads || []).filter((l: { status?: string }) => l.status === 'lead').length;
-        setPendingCount(count);
+        const leads = (await fetchClientLeads()) as ClientLead[] | null;
+        const count = (leads || []).reduce((sum, l) => sum + (l.unread_count || 0), 0);
+        setUnreadTotal(count);
       } catch {
-        setPendingCount(0);
+        setUnreadTotal(0);
       }
     };
-    loadPending();
+    void loadUnread();
+    const timer = setInterval(() => void loadUnread(), 30_000);
+    return () => clearInterval(timer);
   }, []);
+
+  const visibleNav = React.useMemo(
+    () => navItems.filter((item) => !item.superAdminOnly || isSuperAdmin),
+    [isSuperAdmin],
+  );
 
   const isActive = (href: string) => {
     if (href === baseUrl) return router.pathname === baseUrl;
     if (href.includes('tab=chatbot')) return router.pathname === '/clientes/whatsapp' && router.query.tab !== 'contactos';
     if (href.includes('tab=contactos')) return router.pathname === '/clientes/whatsapp' && router.query.tab === 'contactos';
     if (href === `${baseUrl}/cuenta`) return router.pathname === '/clientes/cuenta';
+    if (href === `${baseUrl}/equipo`) return router.pathname === '/clientes/equipo';
     return router.pathname === href;
   };
 
   const displayName =
+    profile?.full_name ||
     user?.user_metadata?.full_name ||
     user?.user_metadata?.name ||
     user?.email?.split('@')[0] ||
@@ -140,13 +160,13 @@ export default function Sidebar() {
             flexShrink: 0,
           }}
         >
-          <img src="/logo-full.png" alt="Inspirato CRM" height={80}/>
+          <img src="/logo-full.png" alt="Inspirato CRM" height={80} />
         </Box>
       </Box>
       <Divider sx={{ borderColor: 'neutral.200' }} />
       <Typography level="body-xs" sx={{ color: 'text.tertiary', textAlign: 'center' }}>
-            CRM y Asistente IA
-          </Typography>
+        CRM y Asistente IA
+      </Typography>
 
       <Box
         sx={{
@@ -166,7 +186,7 @@ export default function Sidebar() {
         }}
       >
         <List size="sm" sx={{ gap: 0.5, '--ListItem-radius': '12px' }}>
-          {navItems.map((item) => {
+          {visibleNav.map((item) => {
             const active = isActive(item.href);
             return (
               <ListItem key={item.href}>
@@ -188,9 +208,9 @@ export default function Sidebar() {
                   <ListItemContent>
                     <Typography level="title-sm">{item.label}</Typography>
                   </ListItemContent>
-                  {item.badge && pendingCount > 0 && (
-                    <Chip size="sm" color="success" variant="solid" sx={{ minWidth: 22, borderRadius: '999px' }}>
-                      {pendingCount}
+                  {item.badge && unreadTotal > 0 && (
+                    <Chip size="sm" color="danger" variant="solid" sx={{ minWidth: 22, borderRadius: '999px' }}>
+                      {unreadTotal > 99 ? '99+' : unreadTotal}
                     </Chip>
                   )}
                 </ListItemButton>
@@ -199,25 +219,27 @@ export default function Sidebar() {
           })}
         </List>
 
-        <Box sx={{ mt: 'auto', pt: 2 }}>
-          <Card
-            variant="outlined"
-            sx={{ p: 2, borderRadius: '16px', bgcolor: '#FFFFFF', borderColor: 'neutral.200', boxShadow: 'sm' }}
-          >
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-              <AutoAwesomeRoundedIcon sx={{ color: 'primary.500', fontSize: 20 }} />
-              <Typography level="title-sm" sx={{ fontWeight: 600 }}>
-                Asistente IA
+        {isSuperAdmin && (
+          <Box sx={{ mt: 'auto', pt: 2 }}>
+            <Card
+              variant="outlined"
+              sx={{ p: 2, borderRadius: '16px', bgcolor: '#FFFFFF', borderColor: 'neutral.200', boxShadow: 'sm' }}
+            >
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <AutoAwesomeRoundedIcon sx={{ color: 'primary.500', fontSize: 20 }} />
+                <Typography level="title-sm" sx={{ fontWeight: 600 }}>
+                  Asistente IA
+                </Typography>
+              </Stack>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary', mb: 1.5 }}>
+                Configura respuestas automáticas y reglas del bot.
               </Typography>
-            </Stack>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary', mb: 1.5 }}>
-              Configura respuestas automáticas y reglas del bot.
-            </Typography>
-            <Button size="sm" variant="solid" color="primary" component="a" href={`${baseUrl}/bot`} sx={{ borderRadius: '10px' }}>
-              Configurar bot
-            </Button>
-          </Card>
-        </Box>
+              <Button size="sm" variant="solid" color="primary" component="a" href={`${baseUrl}/bot`} sx={{ borderRadius: '10px' }}>
+                Configurar bot
+              </Button>
+            </Card>
+          </Box>
+        )}
       </Box>
 
       <Divider sx={{ borderColor: 'neutral.200' }} />
@@ -239,10 +261,17 @@ export default function Sidebar() {
             '&:hover': { bgcolor: 'rgba(255,255,255,0.5)' },
           }}
         >
-          <Avatar size="sm" sx={{ bgcolor: 'primary.500' }}>{initials}</Avatar>
+          <Avatar size="sm" sx={{ bgcolor: 'primary.500' }}>
+            {initials}
+          </Avatar>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography level="title-sm" noWrap>{displayName}</Typography>
-            <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>{user?.email}</Typography>
+            <Typography level="title-sm" noWrap>
+              {displayName}
+            </Typography>
+            <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
+              {isSuperAdmin ? 'Superadmin' : 'Ejecutivo'}
+              {user?.email ? ` · ${user.email}` : ''}
+            </Typography>
           </Box>
         </Box>
         <IconButton

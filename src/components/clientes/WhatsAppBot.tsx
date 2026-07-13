@@ -19,6 +19,7 @@ import {
 import {
   Send,
   CheckCircle,
+  ErrorOutline,
   Chat,
   Search,
   WhatsApp,
@@ -27,28 +28,36 @@ import {
   PauseCircleOutline,
 } from '@mui/icons-material';
 import { useMediaQuery } from '@mui/material';
-import { fetchChatMessages, fetchClientLeads, updateClientLead } from 'pages/api/entities';
+import {
+  fetchChatMessages,
+  fetchClientLeads,
+  markConversationRead,
+  updateClientLead,
+} from 'pages/api/entities';
 import { formatDate } from 'utils/Utils';
 import { sendAPIRequest } from 'pages/api/fileServer';
 import LoadingInformation from './LoadingInformation';
 import ClientDetailPanel from './ClientDetailPanel';
 import { useCrmConfig } from 'hooks/useCrmConfig';
+import { useAuth } from 'providers/AuthProvider';
 import { ClientLead } from 'types/crm';
 import { statusChipSx } from 'utils/statusHelpers';
 import { parseWhatsAppMessage, ParsedWhatsAppMessage } from 'utils/whatsappMessage';
 import WhatsAppMessageBubble from './WhatsAppMessageBubble';
+import { supabaseBrowser } from 'lib/supabase/client';
 
 interface WhatsAppBotProps {
   initialStatusFilter?: string;
 }
 
 const PAGE_SIZE = 15;
-const REFRESH_INTERVAL_MS = 20_000;
 
 export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBotProps) {
   const { config, getStatusLabel } = useCrmConfig();
+  const { user } = useAuth();
   const [openSnackbar, setOpenSnackbar] = useState(false);
   const [messageSnackbar, setMessageSnackbar] = useState('');
+  const [snackbarColor, setSnackbarColor] = useState<'success' | 'danger'>('success');
   const [selectedChat, setSelectedChat] = useState<ClientLead | null>(null);
   const [detailContact, setDetailContact] = useState<ClientLead | null>(null);
   const [message, setMessage] = useState('');
@@ -58,18 +67,21 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
   const [statusFilter, setStatusFilter] = useState(initialStatusFilter);
   const [botFilter, setBotFilter] = useState<'all' | 'paused' | 'active'>('all');
   const [searchConversation, setSearchConversation] = useState('');
-  const [sortBy, setSortBy] = useState('last_date');
+  const [sortBy, setSortBy] = useState('unread');
   const [page, setPage] = useState(1);
-  const [name, setName] = useState('');
   const isMobile = useMediaQuery('(max-width: 1100px)');
   const selectedChatRef = useRef(selectedChat);
   selectedChatRef.current = selectedChat;
 
+  const showToast = useCallback((text: string, color: 'success' | 'danger' = 'success') => {
+    setMessageSnackbar(text);
+    setSnackbarColor(color);
+    setOpenSnackbar(true);
+  }, []);
+
   const mapChatMessages = useCallback(
     (chats: Record<string, unknown>[]) =>
-      chats.map((chat) =>
-        parseWhatsAppMessage(chat, (ts) => formatDate(ts, true)),
-      ),
+      chats.map((chat) => parseWhatsAppMessage(chat, (ts) => formatDate(ts, true))),
     [],
   );
 
@@ -92,33 +104,79 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
     [mapChatMessages],
   );
 
+  const markReadAndRefresh = useCallback(
+    async (phoneNumber: string) => {
+      await markConversationRead(phoneNumber, user?.id);
+      setClientLeads((prev) =>
+        prev.map((lead) =>
+          lead.phone_number === phoneNumber ? { ...lead, unread_count: 0 } : lead,
+        ),
+      );
+      void loadConversations();
+    },
+    [user?.id, loadConversations],
+  );
+
+  const selectChat = useCallback(
+    async (chat: ClientLead) => {
+      setSelectedChat(chat);
+      if ((chat.unread_count || 0) > 0) {
+        await markReadAndRefresh(chat.phone_number);
+      } else {
+        await markConversationRead(chat.phone_number, user?.id);
+      }
+    },
+    [markReadAndRefresh, user?.id],
+  );
+
   useEffect(() => {
     if (!selectedChat) return;
-    loadMessages(selectedChat.phone_number);
+    void loadMessages(selectedChat.phone_number);
   }, [selectedChat?.id, selectedChat?.phone_number, loadMessages]);
 
+  // Carga inicial + Realtime (sin poll)
   useEffect(() => {
-    const refresh = () => {
-      void loadConversations();
-      const chat = selectedChatRef.current;
-      if (chat) void loadMessages(chat.phone_number);
-    };
-    refresh();
-    const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [loadConversations, loadMessages]);
+    void loadConversations();
 
-  const handleNameChange = async () => {
-    if (!selectedChat) return;
-    const updated = await updateClientLead(selectedChat.id, { full_name: name });
-    if (updated) {
-      setMessageSnackbar('Cliente actualizado');
-      setOpenSnackbar(true);
-      const next = { ...selectedChat, full_name: name };
-      setSelectedChat(next);
-      setClientLeads((prev) => prev.map((l) => (l.id === selectedChat.id ? next : l)));
-    }
-  };
+    const channel = supabaseBrowser
+      .channel('inbox-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'messages' },
+        (payload) => {
+          const row = (payload.new || payload.old) as { user_phone?: string; direction?: string } | null;
+          void loadConversations();
+
+          const openPhone = selectedChatRef.current?.phone_number;
+          if (!openPhone || !row?.user_phone) return;
+          if (row.user_phone !== openPhone) return;
+
+          void loadMessages(openPhone);
+          if (payload.eventType === 'INSERT' && row.direction === 'incoming') {
+            void markReadAndRefresh(openPhone);
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'client_lead' },
+        () => {
+          void loadConversations();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'conversation_read_state' },
+        () => {
+          void loadConversations();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabaseBrowser.removeChannel(channel);
+    };
+  }, [loadConversations, loadMessages, markReadAndRefresh]);
 
   const handleStatusChange = async (status: string) => {
     if (!selectedChat) return;
@@ -137,22 +195,29 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
       const next = { ...selectedChat, bot_paused: paused };
       setSelectedChat(next);
       setClientLeads((prev) => prev.map((l) => (l.id === selectedChat.id ? next : l)));
-      setMessageSnackbar(paused ? 'Bot pausado para este contacto' : 'Bot reactivado para este contacto');
-      setOpenSnackbar(true);
+      showToast(paused ? 'Bot pausado para este contacto' : 'Bot reactivado para este contacto');
     }
   };
 
   const handleSend = async () => {
     if (!message.trim() || !selectedChat) return;
+    const textToSend = message.trim();
     setLoading(true);
-    await sendAPIRequest({
-      phone_number: selectedChat.phone_number,
-      message,
-      action: 'message',
-    });
-    await loadMessages(selectedChat.phone_number);
-    setMessage('');
-    setLoading(false);
+    try {
+      await sendAPIRequest({
+        phone_number: selectedChat.phone_number,
+        message: textToSend,
+        action: 'message',
+      });
+      setMessage('');
+      showToast('Mensaje enviado');
+      await loadMessages(selectedChat.phone_number);
+      await loadConversations();
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'No se pudo enviar el mensaje.', 'danger');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const filteredAndSortedChats = useMemo(() => {
@@ -181,8 +246,14 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
           return new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime();
         case 'status':
           return (a.status || '').localeCompare(b.status || '', 'es');
-        default:
+        case 'last_date':
           return new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime();
+        case 'unread':
+        default: {
+          const unreadDiff = (b.unread_count || 0) - (a.unread_count || 0);
+          if (unreadDiff !== 0) return unreadDiff;
+          return new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime();
+        }
       }
     });
   }, [clientLeads, searchConversation, sortBy, statusFilter, botFilter]);
@@ -216,7 +287,9 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
           }}
         >
           <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'neutral.200' }}>
-            <Typography level="title-md" fontWeight={700}>Conversaciones</Typography>
+            <Typography level="title-md" fontWeight={700}>
+              Conversaciones
+            </Typography>
             <Input
               size="sm"
               value={searchConversation}
@@ -229,17 +302,25 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
               <Select size="sm" value={statusFilter} onChange={(_, v) => setStatusFilter(v || 'all')} sx={{ flex: 1 }}>
                 <Option value="all">Todos los estados</Option>
                 {config.leadStatuses.map((s) => (
-                  <Option key={s.key} value={s.key}>{s.label}</Option>
+                  <Option key={s.key} value={s.key}>
+                    {s.label}
+                  </Option>
                 ))}
               </Select>
-              <Select size="sm" value={botFilter} onChange={(_, v) => setBotFilter((v as typeof botFilter) || 'all')} sx={{ flex: 1 }}>
+              <Select
+                size="sm"
+                value={botFilter}
+                onChange={(_, v) => setBotFilter((v as typeof botFilter) || 'all')}
+                sx={{ flex: 1 }}
+              >
                 <Option value="all">Bot: todos</Option>
                 <Option value="active">Bot activo</Option>
                 <Option value="paused">Bot pausado</Option>
               </Select>
             </Stack>
             <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-              <Select size="sm" value={sortBy} onChange={(_, v) => setSortBy(v || 'last_date')} sx={{ flex: 1 }}>
+              <Select size="sm" value={sortBy} onChange={(_, v) => setSortBy(v || 'unread')} sx={{ flex: 1 }}>
+                <Option value="unread">No leídos</Option>
                 <Option value="last_date">Recientes</Option>
                 <Option value="first_date">Antiguos</Option>
                 <Option value="name_asc">A-Z</Option>
@@ -249,24 +330,24 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
 
           <Box sx={{ flex: 1, overflow: 'auto', p: 1 }}>
             {paginatedChats.length === 0 && (
-              <Alert variant="soft" sx={{ m: 1 }}>No hay conversaciones</Alert>
+              <Alert variant="soft" sx={{ m: 1 }}>
+                No hay conversaciones
+              </Alert>
             )}
             {paginatedChats.map((chat) => {
               const statusCfg = config.leadStatuses.find((s) => s.key === chat.status);
               const active = selectedChat?.id === chat.id;
+              const unread = chat.unread_count || 0;
               return (
                 <Box
                   key={chat.id}
-                  onClick={() => {
-                    setSelectedChat(chat);
-                    setName('');
-                  }}
+                  onClick={() => void selectChat(chat)}
                   sx={{
                     p: 1.5,
                     mb: 0.75,
                     borderRadius: '14px',
                     cursor: 'pointer',
-                    bgcolor: active ? '#FFFFFF' : chat.bot_paused ? 'warning.50' : 'transparent',
+                    bgcolor: active ? '#FFFFFF' : unread > 0 ? 'primary.50' : chat.bot_paused ? 'warning.50' : 'transparent',
                     border: '1px solid',
                     borderColor: active ? 'primary.300' : chat.bot_paused ? 'warning.300' : 'transparent',
                     borderLeft: chat.bot_paused ? '4px solid' : undefined,
@@ -277,10 +358,21 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                 >
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography level="title-sm" fontWeight={700}>
-                        {chat.full_name || chat.phone_number}
-                      </Typography>
-                      <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary', mt: 0.25 }}>
+                      <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Typography level="title-sm" fontWeight={unread > 0 ? 800 : 700} noWrap>
+                          {chat.full_name || chat.phone_number}
+                        </Typography>
+                        {unread > 0 && (
+                          <Chip size="sm" color="danger" variant="solid" sx={{ minWidth: 20, borderRadius: '999px', px: 0.75 }}>
+                            {unread > 99 ? '99+' : unread}
+                          </Chip>
+                        )}
+                      </Stack>
+                      <Typography
+                        level="body-xs"
+                        noWrap
+                        sx={{ color: 'text.tertiary', mt: 0.25, fontWeight: unread > 0 ? 600 : 400 }}
+                      >
                         {chat.message_text || 'Sin mensajes'}
                       </Typography>
                     </Box>
@@ -297,7 +389,9 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                     </IconButton>
                   </Stack>
                   <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.75 }}>
-                    <Chip size="sm" sx={statusChipSx(statusCfg)}>{getStatusLabel(chat.status)}</Chip>
+                    <Chip size="sm" sx={statusChipSx(statusCfg)}>
+                      {getStatusLabel(chat.status)}
+                    </Chip>
                     {chat.bot_paused && (
                       <Chip
                         size="sm"
@@ -318,10 +412,21 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
             })}
           </Box>
 
-          <Stack direction="row" justifyContent="center" spacing={1} sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'neutral.200' }}>
-            <Button size="sm" variant="outlined" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Ant</Button>
-            <Typography level="body-xs" sx={{ alignSelf: 'center' }}>{page}/{totalPages}</Typography>
-            <Button size="sm" variant="outlined" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Sig</Button>
+          <Stack
+            direction="row"
+            justifyContent="center"
+            spacing={1}
+            sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'neutral.200' }}
+          >
+            <Button size="sm" variant="outlined" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              Ant
+            </Button>
+            <Typography level="body-xs" sx={{ alignSelf: 'center' }}>
+              {page}/{totalPages}
+            </Typography>
+            <Button size="sm" variant="outlined" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+              Sig
+            </Button>
           </Stack>
         </Sheet>
       )}
@@ -340,7 +445,9 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
               >
                 <Stack direction="row" alignItems="center" spacing={1}>
                   {isMobile && (
-                    <IconButton onClick={() => setSelectedChat(null)}><ArrowBack /></IconButton>
+                    <IconButton onClick={() => setSelectedChat(null)}>
+                      <ArrowBack />
+                    </IconButton>
                   )}
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
@@ -359,14 +466,20 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                         </Chip>
                       )}
                     </Stack>
-                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>{selectedChat.phone_number}</Typography>
+                    <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                      {selectedChat.phone_number}
+                    </Typography>
                   </Box>
                   <Select size="sm" value={selectedChat.status} onChange={(_, v) => handleStatusChange(v || 'lead')}>
                     {config.leadStatuses.map((s) => (
-                      <Option key={s.key} value={s.key}>{s.label}</Option>
+                      <Option key={s.key} value={s.key}>
+                        {s.label}
+                      </Option>
                     ))}
                   </Select>
-                  <IconButton variant="soft" onClick={() => openDetail(selectedChat)}><InfoOutlined /></IconButton>
+                  <IconButton variant="soft" onClick={() => openDetail(selectedChat)}>
+                    <InfoOutlined />
+                  </IconButton>
                 </Stack>
 
                 <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mt: 1.25, gap: 1 }}>
@@ -411,7 +524,10 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                       >
                         {selectedChat.bot_paused ? 'BOT PAUSADO' : 'Pausar bot'}
                       </Typography>
-                      <Typography level="body-xs" sx={{ color: selectedChat.bot_paused ? 'warning.700' : 'text.tertiary', fontSize: 10 }}>
+                      <Typography
+                        level="body-xs"
+                        sx={{ color: selectedChat.bot_paused ? 'warning.700' : 'text.tertiary', fontSize: 10 }}
+                      >
                         {selectedChat.bot_paused ? 'Sin respuestas automáticas' : 'Respuestas automáticas ON'}
                       </Typography>
                     </Box>
@@ -446,7 +562,17 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                 </Alert>
               )}
 
-              <Box sx={{ flex: 1, overflow: 'auto', p: 2, bgcolor: 'background.body', display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Box
+                sx={{
+                  flex: 1,
+                  overflow: 'auto',
+                  p: 2,
+                  bgcolor: 'background.body',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
                 {chatMessages.map((msg) => (
                   <WhatsAppMessageBubble key={msg.id} message={msg} />
                 ))}
@@ -460,10 +586,10 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
                       fullWidth
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                      onKeyDown={(e) => e.key === 'Enter' && void handleSend()}
                       sx={{ borderRadius: '12px' }}
                     />
-                    <IconButton color="primary" variant="solid" onClick={handleSend} disabled={!message.trim()}>
+                    <IconButton color="primary" variant="solid" onClick={() => void handleSend()} disabled={!message.trim()}>
                       <Send />
                     </IconButton>
                   </>
@@ -475,7 +601,9 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
           ) : (
             <Stack flex={1} alignItems="center" justifyContent="center" spacing={1} sx={{ color: 'text.tertiary' }}>
               <Chat sx={{ fontSize: 56, opacity: 0.35 }} />
-              <Typography level="body-md">Selecciona una conversación o haz clic en un cliente para ver su ficha</Typography>
+              <Typography level="body-md">
+                Selecciona una conversación o haz clic en un cliente para ver su ficha
+              </Typography>
             </Stack>
           )}
         </Box>
@@ -493,8 +621,14 @@ export default function WhatsAppBot({ initialStatusFilter = 'lead' }: WhatsAppBo
         />
       )}
 
-      <Snackbar open={openSnackbar} onClose={() => setOpenSnackbar(false)} autoHideDuration={2000} color="success" variant="solid">
-        <CheckCircle /> {messageSnackbar}
+      <Snackbar
+        open={openSnackbar}
+        onClose={() => setOpenSnackbar(false)}
+        autoHideDuration={snackbarColor === 'danger' ? 4000 : 2000}
+        color={snackbarColor}
+        variant="solid"
+      >
+        {snackbarColor === 'success' ? <CheckCircle /> : <ErrorOutline />} {messageSnackbar}
       </Snackbar>
     </Box>
   );

@@ -11,9 +11,33 @@ import {
 export const fetchClientLeads = async () => {
   const clientLeads = await getAll('get_client_leads');
   return clientLeads?.sort(
-    (a: { timestamp?: string }, b: { timestamp?: string }) =>
-      new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime(),
+    (a: { unread_count?: number; timestamp?: string }, b: { unread_count?: number; timestamp?: string }) => {
+      const unreadDiff = (b.unread_count || 0) - (a.unread_count || 0);
+      if (unreadDiff !== 0) return unreadDiff;
+      return new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime();
+    },
   );
+};
+
+export const markConversationRead = async (phoneNumber: string, userId?: string) => {
+  const phone = phoneNumber.trim();
+  if (!phone) return null;
+
+  const payload: Record<string, unknown> = {
+    phone_number: phone,
+    last_read_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (userId) payload.updated_by = userId;
+
+  const { data, error } = await supabase
+    .from('conversation_read_state')
+    .upsert(payload, { onConflict: 'phone_number' })
+    .select()
+    .single();
+
+  if (error || !data) return null;
+  return data;
 };
 
 export const updateClientLead = async (clientId: number, payload: Record<string, unknown>) => {

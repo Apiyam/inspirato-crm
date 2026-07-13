@@ -1,12 +1,12 @@
 import ApiyamCardLayout from 'components/clientes/ApiyamLayout';
-import CrmConfiguration from 'components/clientes/CrmConfiguration';
 import SuperAdminGuard from 'components/clientes/SuperAdminGuard';
+import TeamManagement from 'components/clientes/TeamManagement';
 
-export default function ConfiguracionPage() {
+export default function EquipoPage() {
   return (
-    <ApiyamCardLayout title="Configuración CRM">
+    <ApiyamCardLayout title="Equipo">
       <SuperAdminGuard>
-        <CrmConfiguration />
+        <TeamManagement />
       </SuperAdminGuard>
     </ApiyamCardLayout>
   );
