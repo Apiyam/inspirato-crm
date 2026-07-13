@@ -62,11 +62,6 @@ const tryParseJsonMessage = (text: string): Record<string, unknown> | null => {
   }
 };
 
-const extractUrlFromText = (text: string): string | undefined => {
-  const match = text.match(/https?:\/\/[^\s<>"']+/i);
-  return match?.[0];
-};
-
 /** URLs de la API de Twilio requieren auth — no son descargables en el browser. */
 export function isTwilioApiUrl(url?: string): boolean {
   if (!url) return false;
@@ -130,7 +125,6 @@ export function parseWhatsAppMessage(
     'attachment_url',
     'file_url',
     'media_link',
-    'url',
   ]);
   let mediaId = pickString(raw, ['media_id', 'mediaId', 'whatsapp_media_id']);
   let mediaMime = pickString(raw, ['media_mime', 'media_mime_type', 'mime_type', 'mimetype']);
@@ -144,41 +138,37 @@ export function parseWhatsAppMessage(
       ) || '';
     mediaUrl =
       mediaUrl ||
-      pickString(jsonPayload, ['media_url', 'mediaUrl', 'url', 'link', 'media', 'image', 'file']);
-    mediaId = mediaId || pickString(jsonPayload, ['media_id', 'mediaId', 'id']);
+      pickString(jsonPayload, ['media_url', 'mediaUrl', 'media', 'image', 'file']);
+    mediaId = mediaId || pickString(jsonPayload, ['media_id', 'mediaId']);
     mediaMime = mediaMime || pickString(jsonPayload, ['mime_type', 'mimetype', 'mime']);
     explicitType = explicitType || pickString(jsonPayload, ['type', 'message_type', 'media_type']);
   }
 
-  if (!mediaUrl && text) {
-    const urlInText = extractUrlFromText(text);
-    if (urlInText && inferTypeFromUrl(urlInText) !== 'unknown') {
-      mediaUrl = urlInText;
-    }
-  }
+  // Solo hay archivo descargable si media_id y media_url existen (no nulos).
+  const sourceMediaUrl = mediaUrl;
+  const sourceMediaId = mediaId || extractTwilioMediaId(sourceMediaUrl);
+  const hasMedia = Boolean(sourceMediaId && sourceMediaUrl);
 
   const loweredType = (explicitType || '').toLowerCase();
   let mediaType: WhatsAppMediaType = 'text';
 
-  if (loweredType.includes('image') || loweredType === 'img') mediaType = 'image';
-  else if (loweredType.includes('video')) mediaType = 'video';
-  else if (loweredType.includes('audio') || loweredType.includes('ptt') || loweredType.includes('voice')) {
-    mediaType = 'audio';
-  } else if (loweredType.includes('document') || loweredType.includes('file')) mediaType = 'document';
-  else if (loweredType.includes('sticker')) mediaType = 'sticker';
-  else if (mediaUrl) mediaType = inferTypeFromUrl(mediaUrl);
-  else if (mediaMime) mediaType = inferTypeFromMime(mediaMime);
-  else if (mediaId) mediaType = 'unknown';
+  if (hasMedia) {
+    if (loweredType.includes('image') || loweredType === 'img') mediaType = 'image';
+    else if (loweredType.includes('video')) mediaType = 'video';
+    else if (loweredType.includes('audio') || loweredType.includes('ptt') || loweredType.includes('voice')) {
+      mediaType = 'audio';
+    } else if (loweredType.includes('document') || loweredType.includes('file')) mediaType = 'document';
+    else if (loweredType.includes('sticker')) mediaType = 'sticker';
+    else if (mediaUrl) mediaType = inferTypeFromUrl(mediaUrl);
+    else if (mediaMime) mediaType = inferTypeFromMime(mediaMime);
+    else mediaType = 'unknown';
 
-  const hasMedia = Boolean(mediaUrl || mediaId || (mediaType !== 'text' && mediaType !== 'unknown'));
-
-  if (hasMedia && mediaType === 'text') {
-    mediaType = mediaUrl ? inferTypeFromUrl(mediaUrl) : 'unknown';
+    if (mediaType === 'text') mediaType = 'unknown';
   }
 
   const sanitized = sanitizeMediaFields(mediaUrl, mediaId);
   mediaUrl = sanitized.mediaUrl;
-  mediaId = sanitized.mediaId;
+  mediaId = sanitized.mediaId || sourceMediaId;
 
   return {
     id,
